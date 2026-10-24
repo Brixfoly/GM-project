@@ -1,0 +1,24 @@
+# Compilation files #
+#####################
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+_minted/*
+*.pdf
+
+# Bibliography-linked files #
+#############################
+*.bbl
+*.bcf
+*.blg
+*.xml
+
+# Beamer compilation files #
+############################
+*.nav
+*.snm
+*.vrb

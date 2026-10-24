@@ -1,0 +1,96 @@
+\documentclass{article}
+
+\usepackage{format}
+\usepackage[utf8]{inputenc} % allow utf-8 input
+\usepackage[T1]{fontenc}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{amsmath}
+
+\title{Investigating Token Ordering Strategies in Masked Diffusion Models}
+
+\author{Bouchaud Paul \quad Arthur Djevahirdjian}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction and Motivation}
+
+While autoregressive models (ARMs) typically generate tokens in a fixed order, the alternative proposed by Masked Diffusion Model (MDMs) offers an arbitrary order. This flexibility is particularly interesting in the case of structured reasoning data where the current state of the data may change the optimal generation order. 
+
+The paper Kim et al.~\citep{kim2025train} investigates the trade off between the training difficulty and the gain in flexibility of MDMs. They showed that MDMs face a lot of challenges in the training phase but can avoid some of those by choosing the correct generation ordering. They found significant change in final result between different orderings. 
+
+\section{Research Questions and Hypotheses}
+
+This project investigates how token selection strategies
+affect the performance of MDMs on structured reasoning tasks.
+
+We formulate three hypotheses:
+
+\begin{itemize}
+    \item \textbf{H1:} Confidence-based adaptive inference
+    achieves higher solving accuracy than random token
+    selection.
+
+    \item \textbf{H2:} Probability-margin selection performs
+    better than maximum-probability selection when several
+    token values have similar predicted probabilities.
+
+    \item \textbf{H3:} Alternative uncertainty measures,
+    such as predictive entropy, may provide more reliable
+    token ordering and improve generation accuracy.
+\end{itemize}
+
+\section{Proposed Methodology}
+
+We propose to reproduce three inference strategies studied
+by Kim et al.: random token selection, Top Probability,
+and Top Probability Margin.
+
+The experiments will primarily focus on Sudoku, using
+a pretrained MDM if suitable weights are available,
+or a lightweight model trained for this task.
+
+As an extension, we will implement an entropy-based
+selection strategy, which prioritizes masked positions
+with low predictive entropy:
+
+\begin{equation}
+    H(i) = -\sum_j p_\theta(x_i=j \mid x_t)
+    \log p_\theta(x_i=j \mid x_t).
+\end{equation}
+
+All strategies will be evaluated using the same model,
+test instances, and inference budget.
+
+We will measure puzzle-solving accuracy, token prediction
+accuracy, and inference cost. We will also investigate
+the relationship between model confidence and actual
+prediction correctness, and evaluate how performance
+changes with puzzle difficulty.
+
+\section{Expected Contributions and Resources}
+
+The project aims to reproduce the benefits of adaptive
+inference and provide a controlled comparison of different
+uncertainty-based token ordering strategies.
+
+Our main contribution will be an independent implementation
+of these strategies and an experimental evaluation of
+entropy-based ordering.
+
+To keep the project computationally feasible, experiments
+will focus on small-scale models and inference procedures
+rather than training large language models. The required
+resources will depend on the availability of pretrained
+models and access to GPU computing.
+
+\bibliographystyle{abbrvnat}
+\bibliography{references_abstract}
+
+\end{document}
