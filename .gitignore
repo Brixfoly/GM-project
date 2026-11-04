@@ -22,3 +22,10 @@ _minted/*
 *.nav
 *.snm
 *.vrb
+
+.venv/
+__pycache__/
+results/
+data/raw/
+data/*.csv
+data/*.json
