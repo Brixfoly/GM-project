@@ -24,6 +24,7 @@ _minted/*
 *.vrb
 
 .venv/
+.vscode/
 __pycache__/
 results/
 data/raw/
