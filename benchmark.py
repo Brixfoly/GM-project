@@ -8,9 +8,16 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from experiment_settings import differing_settings
 from prepare_data import DEFAULT_DATA, load_example, load_test_data
 from reporting import evaluate, save_report
-from sampling import METHODS, solve
+from sampling import DIGIT_MODES, METHODS, NOISE_MODES, solve
+
+RESUME_SETTINGS = (
+    "model", "revision", "limit", "sample_seed", "seeds", "steps",
+    "batch_size", "gumbel_scale", "schedule", "protocol", "k",
+    "smoke_test", "device", "torch_version", "noise_mode", "digit_mode",
+)
 
 
 def choose_device(requested):
@@ -32,6 +39,11 @@ def wait_for_device(device):
 
 
 def load_model(model_name, revision, device):
+    from other_models import CHECKPOINTS, load_other_model
+
+    if model_name in CHECKPOINTS:
+        return load_other_model(model_name, device)
+
     from huggingface_hub import snapshot_download
     from nonet.model import SudokuDiT
     from safetensors.torch import load_file
@@ -76,6 +88,8 @@ def run_method(model, puzzles, method, seed, cells_per_step, args, device):
             cells_per_step=cells_per_step,
             schedule=args.schedule,
             gumbel_scale=args.gumbel_scale,
+            noise_mode=args.noise_mode,
+            digit_mode=args.digit_mode,
         )
         wait_for_device(device)
         seconds += time.perf_counter() - before
@@ -98,20 +112,28 @@ def read_arguments():
     parser.add_argument("--seeds", "--seed", type=int, nargs="+", default=[0, 1, 2])
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--gumbel-scale", type=float, default=0.0,
-                        help="Ordering noise (default: 0; historical noisy runs: 0.5)")
+    parser.add_argument("--threads", type=int, default=None, help="CPU torch threads")
+    parser.add_argument("--gumbel-scale", type=float, default=0.5,
+                        help="Gumbel coefficient (paper: 0.5; 0 disables noise)")
+    parser.add_argument("--noise-mode", choices=NOISE_MODES, default="upstream")
+    parser.add_argument("--digit-mode", choices=DIGIT_MODES, default="sample",
+                        help="Sample digits from p_theta (paper), or use historical greedy argmax")
     parser.add_argument("--schedule", choices=["binomial", "linear"], default="binomial")
     parser.add_argument("--protocol", choices=["paper-inspired", "fixed-k"], default="paper-inspired")
     parser.add_argument("--k", type=int, nargs="+", default=[1, 5, 10])
     parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
-    parser.add_argument("--model", default="tchauffi/sudoku-dit")
+    parser.add_argument("--model", default="tchauffi/sudoku-dit",
+                        help="Hugging Face DiT or harry-100k/500k/combined/hard")
     parser.add_argument("--revision", default="main")
     parser.add_argument("--output", type=Path, default=Path("results/benchmark"), help="Results folder")
     parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument("--resume", action="store_true", help="Reuse matching completed runs")
     args = parser.parse_args()
 
     if args.limit < 0 or args.steps < 1 or args.batch_size < 1:
         parser.error("limit must be nonnegative; steps and batch-size must be positive")
+    if args.threads is not None and args.threads < 1:
+        parser.error("threads must be positive")
     if any(count < 1 or count > 81 for count in args.k):
         parser.error("k must be between 1 and 81")
     if len(set(args.seeds)) != len(args.seeds):
@@ -122,8 +144,45 @@ def read_arguments():
     return args
 
 
+def load_previous_results(output, settings, model_info, data_info):
+    """Load progress only when it describes the same experiment."""
+    summary_path = output / "summary.json"
+    if not settings["resume"] or not summary_path.exists():
+        return []
+
+    previous = json.loads(summary_path.read_text(encoding="utf-8"))
+    # Output path, thread count and resume mode do not change the experiment.
+    differences = differing_settings(previous["settings"], settings, RESUME_SETTINGS)
+    if differences or previous["model"] != model_info or previous["dataset"] != data_info:
+        raise ValueError("Cannot resume: settings, model or dataset differ.")
+    return previous["runs"]
+
+
+def reuse_completed_run(results, output, method, seed, cells_per_step,
+                       puzzles, solutions, puzzle_ids):
+    """Validate an existing run before allowing the benchmark to skip it."""
+    completed = [run for run in results if run["method"] == method
+                 and run["seed"] == seed and run["k"] == cells_per_step]
+    if not completed:
+        return False
+    if len(completed) != 1:
+        raise ValueError("Duplicate completed run in summary.")
+
+    with np.load(output / completed[0]["predictions_file"]) as saved:
+        expected_arrays = {"puzzle_ids": puzzle_ids, "puzzles": puzzles, "solutions": solutions}
+        for key, expected in expected_arrays.items():
+            if not np.array_equal(saved[key], expected):
+                raise ValueError(f"Cannot resume: saved {key} differ.")
+        if (saved["predictions"].shape != puzzles.shape
+                or saved["passes"].shape != (len(puzzles),)):
+            raise ValueError("Cannot resume: invalid prediction artifact shapes.")
+    return True
+
+
 def main():
     args = read_arguments()
+    if args.threads is not None:
+        torch.set_num_threads(args.threads)
 
     # 1. Read the original .npy file and reconstruct the selected boards in memory.
     if args.smoke_test:
@@ -149,12 +208,19 @@ def main():
     settings = vars(args).copy()
     settings["device"] = str(device)
     settings["torch_version"] = torch.__version__
-    results = []
+    settings["threads"] = torch.get_num_threads()
+    results = load_previous_results(args.output, settings, model_info, data_info)
     budgets = args.k if args.protocol == "fixed-k" else [None]
 
     for cells_per_step in budgets:
         for seed in args.seeds:
             for method in METHODS:
+                if reuse_completed_run(
+                    results, args.output, method, seed, cells_per_step,
+                    puzzles, solutions, puzzle_ids,
+                ):
+                    print(f"Reusing {method}, seed {seed}", flush=True)
+                    continue
                 predictions, passes, seconds = run_method(
                     model, puzzles, method, seed, cells_per_step, args, device,
                 )

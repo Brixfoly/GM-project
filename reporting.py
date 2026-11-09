@@ -8,6 +8,7 @@ from collections import defaultdict
 import numpy as np
 
 from prepare_data import valid_grid
+from sampling import digit_description, noise_description
 
 PAPER_URL = "https://arxiv.org/html/2502.06768v3"
 PAPER_ACCURACY = {"random": 0.0688, "probability": 0.1851, "margin": 0.8949}
@@ -49,6 +50,14 @@ def wilson_interval(rate, count):
 def save_report(folder, settings, data_info, model_info, results):
     """Keep numeric results in JSON and a readable comparison in Markdown."""
     summary = {
+        "reproduction_status": "independent_comparison",
+        "implementation": {
+            "solver": "sampling.solve",
+            "representation": "81 board cells, 9 digit logits per cell",
+            "digit_prediction": digit_description(settings.get("digit_mode", "greedy")),
+            "ordering_noise": noise_description(settings.get("noise_mode", "legacy-raw")),
+            "remasking": False,
+        },
         "settings": settings,
         "dataset": data_info,
         "model": model_info,
@@ -72,7 +81,8 @@ def save_report(folder, settings, data_info, model_info, results):
         f"{model_info['parameters']:,} parameters.",
         f"Data: {data_info['path']}; {results[0]['puzzles']:,} puzzles per seed.",
         f"Verified original test release: {data_info.get('verified_original_test_set', False)}.",
-        f"Schedule: {settings['schedule']}; raw-score Gumbel scale: {settings['gumbel_scale']}.",
+        f"Schedule: {settings['schedule']}; Gumbel coefficient: {settings['gumbel_scale']}.",
+        f"Digit prediction: {digit_description(settings.get('digit_mode', 'greedy'))}.",
         "",
         "| Method | Budget | Our exact accuracy (mean +/- seed SD) | Valid rate | Paper |",
         "| --- | --- | --- | --- | --- |",
@@ -107,13 +117,16 @@ def save_report(folder, settings, data_info, model_info, results):
     lines += [
         "", "## Interpretation", "",
         "- Repeated seeds reuse the same puzzles; do not pool them as independent test instances.",
-        "- The paper uses a different, approximately 6M-parameter model and training distribution. Our model's training overlap is unknown.",
+        "- The paper uses a different, approximately 6M-parameter model and training distribution. Training/test overlap for the evaluated checkpoint is unaudited.",
         "- This is the cited standard test-data release, not the separate hard set. Exact evaluated author row IDs are unconfirmed.",
-        "- Our optional Gumbel noise is added to raw scores. The cited upstream code uses log-probability scores, annealing and remasking. The exact modified author sampler was not located.",
-        "- Our decoder preserves revealed predictions and uses greedy digit values. Noise scales are not equivalent across the adaptive scores.",
+        f"- Ordering noise: {noise_description(settings.get('noise_mode', 'legacy-raw'))}. The exact modified author sampler was not located.",
+        "- Our decoder preserves revealed predictions. Noise scales are not equivalent across the adaptive scores.",
         "- The binomial reveal schedule with uniform cell selection has the vanilla independent-unmasking distribution.",
         "- Entropy is our extension. It has no published baseline in this paper.",
         "- Timing excludes loading, warmup, data transfers, evaluation and saving; it measures batched throughput.",
         "",
     ]
+    if "adapter" in model_info:
+        lines += ["## Model adapter", "", model_info["adapter"], "",
+                  "This uses our common decoder rather than the linked repository's native sampler.", ""]
     (folder / "comparison.md").write_text("\n".join(lines), encoding="utf-8")

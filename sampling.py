@@ -3,6 +3,26 @@
 import torch
 
 METHODS = ("random", "probability", "margin", "entropy")
+NOISE_MODES = ("upstream", "legacy-raw")
+DIGIT_MODES = ("sample", "greedy")
+
+
+def digit_description(mode):
+    if mode == "sample":
+        return "categorical sampling from p_theta over digits 1..9"
+    if mode == "greedy":
+        return "greedy argmax over digits 1..9"
+    raise ValueError(f"Unknown digit mode: {mode}")
+
+
+def noise_description(mode):
+    if mode == "legacy-raw":
+        return "raw score + coefficient * Gumbel(0, 1)"
+    if mode == "upstream":
+        return ("max log-probability (probability) or raw score (margin/entropy) + "
+                "coefficient * next-time rate * Gumbel(0, 1); "
+                "margin/entropy are unverified extensions")
+    raise ValueError(f"Unknown noise mode: {mode}")
 
 
 def score_cells(probabilities, method, generator):
@@ -54,11 +74,33 @@ def make_reveal_schedule(initial_blanks, steps, schedule, seed):
 
 
 def add_ordering_noise(scores, scale, generator):
-    """Optional Gumbel noise on raw scores, using the previous convention."""
+    """Match the cited upstream topk_masking inverse-CDF formula."""
+    if scale == 0:
+        return scores
     uniform = torch.rand(scores.shape, generator=generator).to(scores.device)
-    uniform = uniform.clamp(1e-7, 1 - 1e-7)
-    gumbel_noise = -torch.log(-torch.log(uniform))
+    gumbel_noise = -torch.log(-torch.log(uniform + 1e-8) + 1e-8)
     return scores + scale * gumbel_noise
+
+
+def ordering_scores(logits, probabilities, method, generator, *, gumbel_scale,
+                    noise_mode, step, total_steps):
+    """Score cells using the chosen method and optional ordering noise."""
+    scores = score_cells(probabilities, method, generator)
+    if method == "random" or gumbel_scale == 0:
+        return scores
+
+    if noise_mode == "legacy-raw":
+        # Preserve historical artifacts, including their numerical clamp.
+        uniform = torch.rand(scores.shape, generator=generator).to(scores.device)
+        gumbel = -torch.log(-torch.log(uniform.clamp(1e-7, 1 - 1e-7)))
+        return scores + gumbel_scale * gumbel
+
+    if method == "probability":
+        scores = logits.float().log_softmax(dim=-1).max(dim=-1).values
+    # Upstream uses the NEXT time t/T, not the model's input time (t+1)/T.
+    # Margin and entropy keep their raw scores as unverified extensions.
+    next_time_rate = (total_steps - step - 1) / total_steps
+    return add_ordering_noise(scores, gumbel_scale * next_time_rate, generator)
 
 
 def choose_cells(scores, masked_cells, reveal_counts):
@@ -73,10 +115,13 @@ def choose_cells(scores, masked_cells, reveal_counts):
 
 @torch.inference_mode()
 def solve(model, puzzles, method, *, seed=0, steps=50, cells_per_step=None,
-          schedule="binomial", gumbel_scale=0.0):
+          schedule="binomial", gumbel_scale=0.5, noise_mode="upstream",
+          digit_mode="sample"):
     """Repeatedly predict digits, choose cells, and fill those cells."""
     if method not in METHODS:
         raise ValueError(f"Unknown ordering method: {method}")
+    noise_description(noise_mode)
+    digit_description(digit_mode)
     if steps < 1 or (cells_per_step is not None and not 1 <= cells_per_step <= 81):
         raise ValueError("steps must be positive and cells_per_step must be between 1 and 81.")
     if not 0 <= gumbel_scale < float("inf"):
@@ -88,6 +133,8 @@ def solve(model, puzzles, method, *, seed=0, steps=50, cells_per_step=None,
     initial_blanks = (board == 0).sum(dim=1)
     passes = torch.zeros(len(board), dtype=torch.long, device=board.device)
     generator = torch.Generator().manual_seed(seed)
+    # Separate digit draws from ordering noise and shared reveal budgets.
+    digit_generator = torch.Generator().manual_seed(seed + 2000003)
 
     if cells_per_step is None:
         total_steps = steps
@@ -113,16 +160,26 @@ def solve(model, puzzles, method, *, seed=0, steps=50, cells_per_step=None,
         if logits.shape != (*board.shape, 9):
             raise ValueError("The model must return (batch size, 81 cells, 9 digits).")
         probabilities = logits.float().softmax(dim=-1)
-        predicted_digits = probabilities.argmax(dim=-1) + 1
 
         # 2. Choose which cells to fill. This is the only difference between methods.
-        scores = score_cells(probabilities, method, generator)
-        if method != "random" and gumbel_scale > 0:
-            scores = add_ordering_noise(scores, gumbel_scale, generator)
+        scores = ordering_scores(
+            logits, probabilities, method, generator,
+            gumbel_scale=gumbel_scale, noise_mode=noise_mode,
+            step=step, total_steps=total_steps,
+        )
         selected_cells = choose_cells(scores, masked_cells, reveal_counts[:, step])
 
-        # 3. Fill selected blanks. Clues and earlier predictions stay fixed.
-        board[selected_cells] = predicted_digits[selected_cells]
+        # 3. Sample only selected blanks from p_theta, as in the paper.
+        # Use a CPU generator for reproducible draws on CPU, CUDA and MPS.
+        if selected_cells.any():
+            selected_probabilities = probabilities[selected_cells]
+            if digit_mode == "sample":
+                digits = torch.multinomial(
+                    selected_probabilities.cpu(), 1, generator=digit_generator,
+                ).squeeze(-1).to(board.device) + 1
+            else:
+                digits = selected_probabilities.argmax(dim=-1) + 1
+            board[selected_cells] = digits
         passes += unfinished_puzzles.long()
 
     return board, passes

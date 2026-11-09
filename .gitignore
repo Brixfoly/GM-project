@@ -28,5 +28,7 @@ _minted/*
 __pycache__/
 results/
 data/raw/
+data/models/
+data/paper_reference/
 data/*.csv
 data/*.json

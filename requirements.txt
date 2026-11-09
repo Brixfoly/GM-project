@@ -1,1 +1,2 @@
 nonet @ git+https://github.com/tchauffi/nonet.git@bd7b66ab150674565c7deff8d3ae32d588b9bfb8
+matplotlib>=3.8,<4
