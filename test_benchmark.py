@@ -15,7 +15,6 @@ from sampling import METHODS, add_ordering_noise, choose_cells, make_reveal_sche
 from other_models import DigitAdapter
 from compare_models import compare, paired_interval
 from noise_comparison import compare_noise
-from audit_paper import audit_summary
 from benchmark import load_previous_results, reuse_completed_run
 
 
@@ -266,28 +265,6 @@ class BenchmarkTests(unittest.TestCase):
     def test_wilson_boundary_cases(self):
         self.assertGreater(wilson_interval(0, 100)[1], 0)
         self.assertLess(wilson_interval(1, 100)[0], 1)
-
-    def test_paper_audit_does_not_confuse_matching_scalars_with_reproduction(self):
-        summary = dict(
-            settings=dict(protocol="paper-inspired", steps=50, gumbel_scale=.5),
-            model=dict(name="tchauffi/sudoku-dit", parameters=1282185),
-            dataset=dict(sha256="f13f537637ac64fb8f4cd5f5c6343a196472c21cd6e596428ed514b9e558ff3a",
-                         selected_puzzle_ids=[123]),
-            runs=[dict(method=method) for method in METHODS],
-        )
-        audit = audit_summary(summary)
-        checks = {item["item"]: item["status"] for item in audit["checks"]}
-        self.assertEqual(checks["Reverse sampling budget"], "matched")
-        self.assertEqual(checks["Gumbel coefficient"], "matched")
-        self.assertEqual(checks["Cited standard test-data release"], "matched")
-        self.assertEqual(checks["Paper's trained model"], "mismatch")
-        self.assertFalse(audit["exact_reproduction_verified"])
-        # Merely using a plausible name/size still cannot certify training or sampler.
-        summary["model"] = dict(name="gpt2-candidate", parameters=6000000)
-        summary["settings"]["protocol"] = "fixed-k"
-        candidate = audit_summary(summary)
-        self.assertFalse(candidate["exact_reproduction_verified"])
-        self.assertEqual(candidate["checks"][0]["status"], "mismatch")
 
     def test_other_model_adapter_maps_mask_and_excludes_nondigit_class(self):
         class RecordingNetwork(torch.nn.Module):

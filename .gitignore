@@ -32,3 +32,8 @@ data/models/
 data/paper_reference/
 data/*.csv
 data/*.json
+
+# Local paper audit tooling and reference metadata
+/audit_paper.py
+/paper_requirements.json
+/paper_reference_sources.json
