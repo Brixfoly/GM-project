@@ -10,5 +10,6 @@ Executing benchmark.py will test the MDM on sudoku grids with different inferenc
 - probability
 - margin
 - lowest entropy
-    and report the accuracy of each one.
+
+and report the accuracy of each one.
 The detailed results are in results/benchmark and are compared with the results in the paper.
